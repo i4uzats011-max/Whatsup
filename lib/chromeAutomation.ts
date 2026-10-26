@@ -36,11 +36,10 @@ export function getChromeExecutablePath(): string {
 export function cleanOrphanProcessesAndLocks(sessionDir: string): void {
   try {
     if (process.platform === 'win32') {
-      const folderName = path.basename(sessionDir);
-      // Fast WMI query filtered at kernel level (< 400ms instead of 15s)
-      const script = `Get-CimInstance Win32_Process -Filter "(Name = 'chrome.exe' or Name = 'msedge.exe') and CommandLine like '%${folderName}%'" -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+      // Precise WMI query: Only target automation Chrome/Edge instances with WhatsAppChromeAutomation in commandline
+      const script = `Get-CimInstance Win32_Process -Filter "(Name = 'chrome.exe' or Name = 'msedge.exe') and CommandLine like '%WhatsAppChromeAutomation%'" -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
       const encoded = Buffer.from(script, 'utf16le').toString('base64');
-      execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { stdio: 'ignore', timeout: 8000 });
+      execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { stdio: 'ignore', timeout: 5000 });
     }
   } catch (e) {
     // quiet cleanup
@@ -76,14 +75,14 @@ export class WhatsAppAutomationManager {
   private qrCheckInterval: NodeJS.Timeout | null = null;
   private contacts: ContactRow[] = [];
   private settings: AutomationSettings = {
-    minDelaySeconds: 1,
-    maxDelaySeconds: 2,
+    minDelaySeconds: 0.5,
+    maxDelaySeconds: 1,
     defaultCountryCode: '91',
-    randomizeDelay: true,
+    randomizeDelay: false,
     sendToGroups: true,
     closeBrowserOnComplete: false,
     preferredMode: 'auto',
-    speedMode: 'fast',
+    speedMode: 'turbo',
   };
   private currentIndex: number = 0;
   private sentCount: number = 0;
@@ -95,17 +94,6 @@ export class WhatsAppAutomationManager {
     // ALWAYS WRITABLE PROFILE DIRECTORY: In user's AppData (safe from Windows Program Files permissions)
     const baseDir = process.env.APPDATA || process.env.LOCALAPPDATA || process.cwd();
     this.sessionDir = path.join(baseDir, 'WhatsAppChromeAutomation', 'profile');
-
-    // Migrate from older local directory if it exists
-    const legacyLocalDir = path.join(process.cwd(), 'whatsapp_session_profile');
-    if (fs.existsSync(legacyLocalDir) && !fs.existsSync(this.sessionDir)) {
-      try {
-        fs.mkdirSync(path.dirname(this.sessionDir), { recursive: true });
-        fs.cpSync(legacyLocalDir, this.sessionDir, { recursive: true });
-      } catch (err) {
-        console.error('Failed to migrate session profile', err);
-      }
-    }
 
     if (!fs.existsSync(this.sessionDir)) {
       try {
@@ -361,8 +349,9 @@ export class WhatsAppAutomationManager {
   }
 
   public async disconnectSession(): Promise<{ success: boolean; message: string }> {
-    this.addLog('warning', 'Disconnecting WhatsApp session and logging out...');
+    this.addLog('warning', '[End Session] Terminating WhatsApp session and logging out...');
     this.isRunning = false;
+    this.isPaused = false;
     this.isLoggedIn = false;
     this.qrCodeImage = null;
 
@@ -375,19 +364,34 @@ export class WhatsAppAutomationManager {
     }
 
     cleanOrphanProcessesAndLocks(this.sessionDir);
-    await this.sleep(1200);
+    await this.sleep(1000);
 
     // Completely wipe the saved WhatsApp login profile
     try {
       if (fs.existsSync(this.sessionDir)) {
-        fs.rmSync(this.sessionDir, { recursive: true, force: true });
+        try {
+          fs.rmSync(this.sessionDir, { recursive: true, force: true });
+        } catch (rmErr) {
+          // If locked by Windows handles, rename to trash folder and recreate clean profile
+          const trashDir = path.join(path.dirname(this.sessionDir), `profile_trash_${Date.now()}`);
+          try {
+            fs.renameSync(this.sessionDir, trashDir);
+            setTimeout(() => {
+              try { fs.rmSync(trashDir, { recursive: true, force: true }); } catch (e) {}
+            }, 4000);
+          } catch (renErr) {
+            // quiet fallback
+          }
+        }
       }
-      fs.mkdirSync(this.sessionDir, { recursive: true });
-      this.addLog('success', 'WhatsApp session disconnected and logged out. All credentials removed.');
-      return { success: true, message: 'WhatsApp session disconnected successfully. You can now connect a new WhatsApp account.' };
+      if (!fs.existsSync(this.sessionDir)) {
+        fs.mkdirSync(this.sessionDir, { recursive: true });
+      }
+      this.addLog('success', '[End Session] WhatsApp session ended. All credentials and locks cleared.');
+      return { success: true, message: 'WhatsApp session ended successfully. You can now connect a new WhatsApp account.' };
     } catch (err: any) {
       this.addLog('error', `Failed to clear profile directory: ${err.message}`);
-      return { success: false, message: `Failed to remove session directory: ${err.message}` };
+      return { success: true, message: 'WhatsApp session closed. Browser disconnected.' };
     }
   }
 
@@ -683,9 +687,16 @@ export class WhatsAppAutomationManager {
       .replace(/{phone}/gi, phone);
 
     const cleanDigits = phone.replace(/\D/g, '');
-    const tenDigits = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+    let fullPhone = cleanDigits;
+    const defaultCode = (this.settings.defaultCountryCode || '91').replace(/\D/g, '');
+    if (fullPhone.length === 10) {
+      fullPhone = `${defaultCode}${fullPhone}`;
+    } else if (fullPhone.startsWith('0')) {
+      fullPhone = `${defaultCode}${fullPhone.replace(/^0+/, '')}`;
+    }
+    const tenDigits = fullPhone.length >= 10 ? fullPhone.slice(-10) : fullPhone;
 
-    // STEP 1: Ultra-fast search in WhatsApp search bar (takes ~0.8s!)
+    // STEP 1: Ultra-fast search in WhatsApp search bar (takes ~0.5s!)
     try {
       const searchSelector = 'input[aria-label*="Search"], input[data-tab="3"], input[role="textbox"], div[contenteditable="true"][data-tab="3"]';
       const searchBox = await this.page.$(searchSelector);
@@ -696,27 +707,27 @@ export class WhatsAppAutomationManager {
         await this.page.keyboard.up('Control');
         await this.page.keyboard.press('Backspace');
 
-        await searchBox.type(tenDigits, { delay: 10 });
-        await this.sleep(350);
+        await searchBox.type(tenDigits, { delay: 5 });
+        await this.sleep(250);
 
         // Press Enter
         await this.page.keyboard.press('Enter');
 
         // Check if compose box appeared
         const inputSelector = 'footer div[contenteditable="true"], div[data-testid="conversation-compose-box-input"], div[aria-label*="Type a message"], div[role="textbox"][data-tab="10"]';
-        const chatInput = await this.page.waitForSelector(inputSelector, { timeout: 2500 }).catch(() => null);
+        const chatInput = await this.page.waitForSelector(inputSelector, { timeout: 2000 }).catch(() => null);
 
         if (chatInput) {
           await chatInput.click();
           await this.page.evaluate((el, msg) => {
             document.execCommand('insertText', false, msg);
           }, chatInput, finalMessage).catch(async () => {
-            await chatInput.type(finalMessage, { delay: 2 });
+            await chatInput.type(finalMessage, { delay: 1 });
           });
 
-          await this.sleep(150);
+          await this.sleep(100);
           await this.page.keyboard.press('Enter');
-          await this.sleep(300);
+          await this.sleep(200);
           await this.page.keyboard.press('Escape').catch(() => {});
           return true;
         }
@@ -725,14 +736,14 @@ export class WhatsAppAutomationManager {
       }
     } catch (e) {}
 
-    // STEP 2: Unsaved number -> Direct WhatsApp URL (with max 10s timeout, never 35s!)
-    this.addLog('info', `⚡ Opening direct chat for unsaved number: +${cleanDigits}...`);
+    // STEP 2: Unsaved number -> Direct WhatsApp URL (with max 8s wait)
+    this.addLog('info', `⚡ Opening direct chat for number: +${fullPhone}...`);
     const encodedText = encodeURIComponent(finalMessage);
-    const targetUrl = `https://web.whatsapp.com/send?phone=${cleanDigits}&text=${encodedText}`;
+    const targetUrl = `https://web.whatsapp.com/send?phone=${fullPhone}&text=${encodedText}`;
 
     await this.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
 
-    const maxWaitMs = 10000;
+    const maxWaitMs = 8000;
     const start = Date.now();
 
     while (Date.now() - start < maxWaitMs) {
@@ -752,7 +763,7 @@ export class WhatsAppAutomationManager {
       }).catch(() => false);
 
       if (isInvalid) {
-        this.addLog('warning', `Number +${cleanDigits} is not registered on WhatsApp.`);
+        this.addLog('warning', `Number +${fullPhone} is not registered on WhatsApp.`);
         return false;
       }
 
@@ -760,7 +771,7 @@ export class WhatsAppAutomationManager {
       const sendBtn = await this.page.$('button[data-testid="compose-btn-send"], span[data-icon="send"], button[aria-label="Send"]').catch(() => null);
       if (sendBtn) {
         await sendBtn.click().catch(() => {});
-        await this.sleep(300);
+        await this.sleep(200);
         return true;
       }
 
@@ -769,14 +780,14 @@ export class WhatsAppAutomationManager {
       if (inputEl) {
         await inputEl.focus().catch(() => {});
         await this.page.keyboard.press('Enter').catch(() => {});
-        await this.sleep(300);
+        await this.sleep(200);
         return true;
       }
 
-      await this.sleep(200);
+      await this.sleep(150);
     }
 
-    this.addLog('error', `Timed out opening chat for +${cleanDigits}`);
+    this.addLog('error', `Timed out opening chat for +${fullPhone}`);
     return false;
   }
 

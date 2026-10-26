@@ -256,25 +256,26 @@ export default function Home() {
     }
   };
 
-  // Disconnect & Logout WhatsApp Session
-  const handleDisconnectSession = async () => {
-    if (!confirm('Are you sure you want to disconnect WhatsApp?\n\nThis will log out the active session and remove saved credentials so you can scan a new QR code.')) return;
+  // End Session / Disconnect WhatsApp
+  const handleEndSession = async () => {
+    if (!confirm('Are you sure you want to End WhatsApp Session?\n\nThis will safely close Chrome, clear active locks, and log out the WhatsApp account so you can start a fresh session.')) return;
     setIsDisconnecting(true);
     try {
       const res = await fetch('/api/whatsapp/disconnect', { method: 'POST' });
       const data = await res.json();
       if (data.success) {
-        setStatus(prev => ({ ...prev, isLoggedIn: false, qrCodeImage: null }));
-        alert('WhatsApp session disconnected successfully.');
+        setStatus(prev => ({ ...prev, isLoggedIn: false, qrCodeImage: null, isRunning: false }));
+        alert('WhatsApp session ended successfully.');
       } else {
-        alert('Disconnect notice: ' + data.message);
+        alert('Notice: ' + data.message);
       }
     } catch (err: any) {
-      alert('Error disconnecting session: ' + err.message);
+      alert('Error ending session: ' + err.message);
     } finally {
       setIsDisconnecting(false);
     }
   };
+  const handleDisconnectSession = handleEndSession;
 
   // Start Campaign with Pre-flight Login Check!
   const handleStartCampaign = async () => {
@@ -330,8 +331,16 @@ export default function Home() {
   };
 
   // Speed Mode Preset Setter
-  const setSpeedPreset = (mode: 'fast' | 'balanced' | 'safe') => {
-    if (mode === 'fast') {
+  const setSpeedPreset = (mode: 'turbo' | 'fast' | 'balanced' | 'safe') => {
+    if (mode === 'turbo') {
+      setSettings((prev) => ({
+        ...prev,
+        speedMode: 'turbo',
+        minDelaySeconds: 0.2,
+        maxDelaySeconds: 0.5,
+        randomizeDelay: false,
+      }));
+    } else if (mode === 'fast') {
       setSettings((prev) => ({
         ...prev,
         speedMode: 'fast',
@@ -570,17 +579,15 @@ export default function Home() {
               <span>{isForceResetting ? 'Fixing...' : 'Fix Chrome'}</span>
             </button>
 
-            {status.isLoggedIn && (
-              <button
-                onClick={handleDisconnectSession}
-                disabled={isDisconnecting}
-                className="inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-medium text-rose-800 bg-rose-100 hover:bg-rose-200 rounded-lg border border-rose-300 transition-colors"
-                title="Disconnect & Log out WhatsApp"
-              >
-                <LogOut className={`w-3.5 h-3.5 ${isDisconnecting ? 'animate-spin' : ''}`} />
-                <span>{isDisconnecting ? 'Logging out...' : 'Disconnect WhatsApp'}</span>
-              </button>
-            )}
+            <button
+              onClick={handleEndSession}
+              disabled={isDisconnecting}
+              className="inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-300 transition-colors shadow-xs"
+              title="End active session, close Chrome, and log out"
+            >
+              <LogOut className={`w-3.5 h-3.5 ${isDisconnecting ? 'animate-spin' : ''}`} />
+              <span>{isDisconnecting ? 'Ending...' : 'End Session'}</span>
+            </button>
 
             <button
               onClick={downloadSampleTemplate}
@@ -669,13 +676,13 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={handleDisconnectSession}
+                  onClick={handleEndSession}
                   disabled={isDisconnecting}
-                  className="px-3.5 py-2 text-xs font-semibold bg-rose-600/90 hover:bg-rose-700 text-white rounded-xl transition-colors shadow-sm flex items-center space-x-1.5 border border-rose-400/30"
-                  title="Disconnect & Log out current WhatsApp account"
+                  className="px-3.5 py-2 text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white rounded-xl transition-colors shadow-sm flex items-center space-x-1.5 border border-rose-400/30"
+                  title="End active session and log out WhatsApp account"
                 >
                   <LogOut className={`w-3.5 h-3.5 ${isDisconnecting ? 'animate-spin' : ''}`} />
-                  <span>{isDisconnecting ? 'Disconnecting...' : 'Disconnect WhatsApp'}</span>
+                  <span>{isDisconnecting ? 'Ending...' : 'End Session'}</span>
                 </button>
               </div>
             </div>
@@ -752,6 +759,17 @@ export default function Home() {
                     >
                       <Wrench className={`w-3.5 h-3.5 ${isForceResetting ? 'animate-spin' : ''}`} />
                       <span>{isForceResetting ? 'Fixing...' : 'Fix / Unlock Chrome'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleEndSession}
+                      disabled={isDisconnecting}
+                      className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-100 hover:bg-rose-200 text-rose-800 border border-rose-300 transition-colors"
+                      title="End session, close Chrome, and clear saved credentials"
+                    >
+                      <LogOut className={`w-3.5 h-3.5 ${isDisconnecting ? 'animate-spin' : ''}`} />
+                      <span>{isDisconnecting ? 'Ending...' : 'End Session'}</span>
                     </button>
 
                     <span className="text-[11px] text-slate-400">
@@ -938,7 +956,20 @@ export default function Home() {
                 <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
                 <span>Delivery Speed:</span>
               </label>
-              <div className="grid grid-cols-3 gap-1.5 text-xs">
+              <div className="grid grid-cols-4 gap-1.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setSpeedPreset('turbo')}
+                  className={`p-2 rounded-lg border text-center transition-all ${
+                    settings.speedMode === 'turbo'
+                      ? 'border-purple-500 bg-purple-50 text-purple-900 font-bold shadow-xs'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="block text-xs">⚡ Ultra Turbo</span>
+                  <span className="text-[10px] text-slate-500 block leading-tight mt-0.5">0.2-0.5s</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setSpeedPreset('fast')}
@@ -948,7 +979,7 @@ export default function Home() {
                       : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                 >
-                  <span className="block text-xs">⚡ Turbo Fast</span>
+                  <span className="block text-xs">⚡ Fast</span>
                   <span className="text-[10px] text-slate-500 block leading-tight mt-0.5">0.5-1s delay</span>
                 </button>
 

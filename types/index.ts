@@ -17,7 +17,7 @@ export interface AutomationSettings {
   sendToGroups: boolean;
   closeBrowserOnComplete: boolean;
   preferredMode: 'auto' | 'phone_only' | 'name_only';
-  speedMode: 'fast' | 'balanced' | 'safe';
+  speedMode: 'turbo' | 'fast' | 'balanced' | 'safe';
 }
 
 export interface AutomationProgress {

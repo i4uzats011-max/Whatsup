@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-chrome-automation",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": true,
   "main": "electron/main.js",
   "repository": {
@@ -44,8 +44,8 @@
     ],
     "extraResources": [
       {
-        "from": ".next/standalone",
-        "to": "app/.next/standalone",
+        "from": "standalone_dist",
+        "to": "standalone_dist",
         "filter": [
           "**/*"
         ]

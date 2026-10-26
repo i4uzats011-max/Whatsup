@@ -32,12 +32,13 @@ function waitForServer(url, timeout = 30000) {
 
 function startNextProductionServer() {
   return new Promise((resolve, reject) => {
-    // In production, server.js from Next.js standalone output
-    const serverPath = path.join(process.resourcesPath, 'app', '.next', 'standalone', 'server.js');
+    // In production, server.js from Next.js standalone output in standalone_dist
+    const serverPath = path.join(process.resourcesPath, 'standalone_dist', 'server', 'server.js');
 
     nextServerProcess = fork(serverPath, [], {
       env: {
         ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
         NODE_ENV: 'production',
         PORT: PORT.toString(),
       },
@@ -57,7 +58,7 @@ function startNextProductionServer() {
 
     // Wait until localhost:PORT responds
     const targetUrl = `http://localhost:${PORT}`;
-    waitForServer(targetUrl)
+    waitForServer(targetUrl, 45000)
       .then(() => resolve(targetUrl))
       .catch(reject);
   });
@@ -85,6 +86,10 @@ async function createWindow() {
       loadUrl = await startNextProductionServer();
     } catch (err) {
       console.error('Error starting production Next.js server:', err);
+      dialog.showErrorBox(
+        'Server Initialization Error',
+        `Failed to start internal Next.js application server: ${err.message}\n\nPlease check if port ${PORT} is in use.`
+      );
     }
   }
 
