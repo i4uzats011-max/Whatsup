@@ -8,6 +8,10 @@
 /out/
 /build
 
+# Electron distribution installers
+/dist/
+/release/
+
 # TypeScript build info
 *.tsbuildinfo
 

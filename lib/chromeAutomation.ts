@@ -6,11 +6,23 @@ import { ContactRow, AutomationSettings, LogEntry, AutomationProgress } from '@/
 
 export function getChromeExecutablePath(): string {
   const possiblePaths = [
+    // Standard Google Chrome
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
     path.join(process.env.PROGRAMFILES || '', 'Google\\Chrome\\Application\\chrome.exe'),
     path.join(process.env['PROGRAMFILES(X86)'] || '', 'Google\\Chrome\\Application\\chrome.exe'),
+
+    // Open-source Chromium
+    'C:\\Program Files\\Chromium\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Chromium\\Application\\chrome.exe',
+    path.join(process.env.LOCALAPPDATA || '', 'Chromium\\Application\\chrome.exe'),
+
+    // Microsoft Edge (100% Chromium, pre-installed on all Windows 10 & 11)
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    path.join(process.env['PROGRAMFILES(X86)'] || '', 'Microsoft\\Edge\\Application\\msedge.exe'),
+    path.join(process.env.PROGRAMFILES || '', 'Microsoft\\Edge\\Application\\msedge.exe'),
   ];
 
   for (const p of possiblePaths) {
@@ -26,7 +38,7 @@ export function cleanOrphanProcessesAndLocks(sessionDir: string): void {
     if (process.platform === 'win32') {
       const folderName = path.basename(sessionDir);
       // Fast WMI query filtered at kernel level (< 400ms instead of 15s)
-      const script = `Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' and CommandLine like '%${folderName}%'" -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+      const script = `Get-CimInstance Win32_Process -Filter "(Name = 'chrome.exe' or Name = 'msedge.exe') and CommandLine like '%${folderName}%'" -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
       const encoded = Buffer.from(script, 'utf16le').toString('base64');
       execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { stdio: 'ignore', timeout: 8000 });
     }
@@ -80,8 +92,20 @@ export class WhatsAppAutomationManager {
   private sessionDir: string;
 
   constructor() {
-    // SINGLE PERMANENT PROFILE DIRECTORY: Stores WhatsApp login permanently!
-    this.sessionDir = path.join(process.cwd(), 'whatsapp_session_profile');
+    // ALWAYS WRITABLE PROFILE DIRECTORY: In user's AppData (safe from Windows Program Files permissions)
+    const baseDir = process.env.APPDATA || process.env.LOCALAPPDATA || process.cwd();
+    this.sessionDir = path.join(baseDir, 'WhatsAppChromeAutomation', 'profile');
+
+    // Migrate from older local directory if it exists
+    const legacyLocalDir = path.join(process.cwd(), 'whatsapp_session_profile');
+    if (fs.existsSync(legacyLocalDir) && !fs.existsSync(this.sessionDir)) {
+      try {
+        fs.mkdirSync(path.dirname(this.sessionDir), { recursive: true });
+        fs.cpSync(legacyLocalDir, this.sessionDir, { recursive: true });
+      } catch (err) {
+        console.error('Failed to migrate session profile', err);
+      }
+    }
 
     if (!fs.existsSync(this.sessionDir)) {
       try {
@@ -159,7 +183,12 @@ export class WhatsAppAutomationManager {
 
         // Check if logged in (chat list pane visible)
         const isAuth = await this.page.evaluate(() => {
-          const chatList = document.querySelector('#pane-side') || document.querySelector('div[aria-label="Chat list"]');
+          const chatList =
+            document.querySelector('#pane-side') ||
+            document.querySelector('#side') ||
+            document.querySelector('div[aria-label="Chat list"]') ||
+            document.querySelector('div[data-testid="chat-list"]') ||
+            document.querySelector('header span[data-icon="community"]');
           return !!chatList;
         }).catch(() => false);
 
@@ -201,7 +230,12 @@ export class WhatsAppAutomationManager {
     }
     try {
       const isAuth = await this.page.evaluate(() => {
-        const chatList = document.querySelector('#pane-side') || document.querySelector('div[aria-label="Chat list"]');
+        const chatList =
+          document.querySelector('#pane-side') ||
+          document.querySelector('#side') ||
+          document.querySelector('div[aria-label="Chat list"]') ||
+          document.querySelector('div[data-testid="chat-list"]') ||
+          document.querySelector('header span[data-icon="community"]');
         return !!chatList;
       }).catch(() => false);
 
@@ -262,6 +296,9 @@ export class WhatsAppAutomationManager {
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-blink-features=AutomationControlled',
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--disable-site-isolation-trials',
+          '--no-default-browser-check',
         ],
         ignoreDefaultArgs: ['--enable-automation'],
       };
@@ -278,6 +315,16 @@ export class WhatsAppAutomationManager {
       const pages = await this.browser.pages();
       this.page = pages.length > 0 ? pages[0] : await this.browser.newPage();
 
+      // Stealth & Real Browser User-Agent to avoid WhatsApp Web connection flags
+      try {
+        await this.page.setUserAgent(
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
+        );
+        await this.page.evaluateOnNewDocument(() => {
+          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        });
+      } catch (e) {}
+
       this.browser.on('disconnected', () => {
         this.addLog('warning', 'Google Chrome was closed.');
         this.browser = null;
@@ -290,7 +337,11 @@ export class WhatsAppAutomationManager {
       });
 
       this.addLog('info', 'Opening WhatsApp Web (https://web.whatsapp.com)...');
-      await this.page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 60000 });
+      try {
+        await this.page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 90000 });
+      } catch (navErr: any) {
+        this.addLog('warning', `WhatsApp Web initial load note: ${navErr.message}. Waiting for page elements...`);
+      }
       await this.page.bringToFront();
 
       // Check if already authenticated from saved session
@@ -306,6 +357,37 @@ export class WhatsAppAutomationManager {
     } catch (err: any) {
       this.addLog('error', `Failed to open Chrome: ${err.message}`);
       return { success: false, message: err.message };
+    }
+  }
+
+  public async disconnectSession(): Promise<{ success: boolean; message: string }> {
+    this.addLog('warning', 'Disconnecting WhatsApp session and logging out...');
+    this.isRunning = false;
+    this.isLoggedIn = false;
+    this.qrCodeImage = null;
+
+    if (this.browser) {
+      try {
+        await this.browser.close();
+      } catch (e) {}
+      this.browser = null;
+      this.page = null;
+    }
+
+    cleanOrphanProcessesAndLocks(this.sessionDir);
+    await this.sleep(1200);
+
+    // Completely wipe the saved WhatsApp login profile
+    try {
+      if (fs.existsSync(this.sessionDir)) {
+        fs.rmSync(this.sessionDir, { recursive: true, force: true });
+      }
+      fs.mkdirSync(this.sessionDir, { recursive: true });
+      this.addLog('success', 'WhatsApp session disconnected and logged out. All credentials removed.');
+      return { success: true, message: 'WhatsApp session disconnected successfully. You can now connect a new WhatsApp account.' };
+    } catch (err: any) {
+      this.addLog('error', `Failed to clear profile directory: ${err.message}`);
+      return { success: false, message: `Failed to remove session directory: ${err.message}` };
     }
   }
 

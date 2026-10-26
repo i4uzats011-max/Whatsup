@@ -29,7 +29,8 @@ import {
   Unlock,
   Wrench,
   ExternalLink,
-  FileDown
+  FileDown,
+  LogOut
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { ContactRow, AutomationProgress, AutomationSettings } from '@/types';
@@ -44,6 +45,7 @@ export default function Home() {
   const [isOpeningChrome, setIsOpeningChrome] = useState(false);
   const [isRestartingChrome, setIsRestartingChrome] = useState(false);
   const [isForceResetting, setIsForceResetting] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [isClearingLogs, setIsClearingLogs] = useState(false);
   const [activeTab, setActiveTab] = useState<'all' | 'sent' | 'failed'>('all');
 
@@ -251,6 +253,26 @@ export default function Home() {
       alert('Error resetting Chrome: ' + err.message);
     } finally {
       setIsForceResetting(false);
+    }
+  };
+
+  // Disconnect & Logout WhatsApp Session
+  const handleDisconnectSession = async () => {
+    if (!confirm('Are you sure you want to disconnect WhatsApp?\n\nThis will log out the active session and remove saved credentials so you can scan a new QR code.')) return;
+    setIsDisconnecting(true);
+    try {
+      const res = await fetch('/api/whatsapp/disconnect', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setStatus(prev => ({ ...prev, isLoggedIn: false, qrCodeImage: null }));
+        alert('WhatsApp session disconnected successfully.');
+      } else {
+        alert('Disconnect notice: ' + data.message);
+      }
+    } catch (err: any) {
+      alert('Error disconnecting session: ' + err.message);
+    } finally {
+      setIsDisconnecting(false);
     }
   };
 
@@ -548,6 +570,18 @@ export default function Home() {
               <span>{isForceResetting ? 'Fixing...' : 'Fix Chrome'}</span>
             </button>
 
+            {status.isLoggedIn && (
+              <button
+                onClick={handleDisconnectSession}
+                disabled={isDisconnecting}
+                className="inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-medium text-rose-800 bg-rose-100 hover:bg-rose-200 rounded-lg border border-rose-300 transition-colors"
+                title="Disconnect & Log out WhatsApp"
+              >
+                <LogOut className={`w-3.5 h-3.5 ${isDisconnecting ? 'animate-spin' : ''}`} />
+                <span>{isDisconnecting ? 'Logging out...' : 'Disconnect WhatsApp'}</span>
+              </button>
+            )}
+
             <button
               onClick={downloadSampleTemplate}
               className="inline-flex items-center space-x-1.5 px-3 py-2 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg border border-emerald-200 transition-colors"
@@ -632,6 +666,16 @@ export default function Home() {
                 >
                   <Chrome className="w-4 h-4 text-emerald-600" />
                   <span>View Chrome Window</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDisconnectSession}
+                  disabled={isDisconnecting}
+                  className="px-3.5 py-2 text-xs font-semibold bg-rose-600/90 hover:bg-rose-700 text-white rounded-xl transition-colors shadow-sm flex items-center space-x-1.5 border border-rose-400/30"
+                  title="Disconnect & Log out current WhatsApp account"
+                >
+                  <LogOut className={`w-3.5 h-3.5 ${isDisconnecting ? 'animate-spin' : ''}`} />
+                  <span>{isDisconnecting ? 'Disconnecting...' : 'Disconnect WhatsApp'}</span>
                 </button>
               </div>
             </div>

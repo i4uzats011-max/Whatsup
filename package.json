@@ -2,13 +2,59 @@
   "name": "whatsapp-chrome-automation",
   "version": "1.0.0",
   "private": true,
+  "main": "electron/main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/i4uzats011-max/Whatsup.git"
+  },
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start -p 3000"
+    "start": "next start -p 3000",
+    "electron:dev": "concurrently \"next dev -p 3000\" \"wait-on tcp:3000 && electron .\"",
+    "electron:build": "node scripts/build-electron.js && electron-builder --win",
+    "dist": "node scripts/build-electron.js && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.whatsapp.automation",
+    "productName": "WhatsApp Chrome Automation",
+    "directories": {
+      "output": "dist"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "i4uzats011-max",
+        "repo": "Whatsup"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "WhatsApp Automation"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".next/standalone",
+        "to": "app/.next/standalone",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   },
   "dependencies": {
     "clsx": "^2.1.1",
+    "electron-updater": "^6.8.11",
     "lucide-react": "^0.446.0",
     "next": "^14.2.14",
     "puppeteer-core": "^23.4.0",
@@ -22,8 +68,12 @@
     "@types/react": "^18.3.8",
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.20",
+    "concurrently": "^10.0.6",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.12",
-    "typescript": "^5.6.2"
+    "typescript": "^5.6.2",
+    "wait-on": "^9.5.1"
   }
 }
